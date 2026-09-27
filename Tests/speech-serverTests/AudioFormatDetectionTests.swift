@@ -29,17 +29,20 @@ final class AudioFormatDetectionTests: XCTestCase {
         XCTAssertEqual(audioFileExtension(filename: "voice.ogg", header: Data()), ".ogg")
     }
 
+    func testAACFilenameExtension() {
+        XCTAssertEqual(audioFileExtension(filename: "voice.aac", header: Data()), ".aac")
+    }
+
     func testCaseInsensitiveExtension() {
         XCTAssertEqual(audioFileExtension(filename: "AUDIO.WAV", header: Data()), ".wav")
         XCTAssertEqual(audioFileExtension(filename: "Track.MP3", header: Data()), ".mp3")
     }
 
-    // MARK: - Filename priority over magic bytes
+    // MARK: - Magic bytes take priority over filename
 
-    func testFilenameOverridesWAVMagic() {
-        // mp3 filename, but WAV magic bytes → filename wins
+    func testWAVMagicOverridesMisleadingFilename() {
         let wavMagic = Data([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45])
-        XCTAssertEqual(audioFileExtension(filename: "upload.mp3", header: wavMagic), ".mp3")
+        XCTAssertEqual(audioFileExtension(filename: "upload.mp3", header: wavMagic), ".wav")
     }
 
     // MARK: - Magic byte detection (no/unknown filename extension)
@@ -76,6 +79,21 @@ final class AudioFormatDetectionTests: XCTestCase {
         // bytes 4–7 == "ftyp"
         let header = Data([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x4D, 0x34, 0x41, 0x20])
         XCTAssertEqual(audioFileExtension(filename: "upload", header: header), ".m4a")
+    }
+
+    func testOGGMagicBytes() {
+        let header = Data([0x4F, 0x67, 0x67, 0x53, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        XCTAssertEqual(audioFileExtension(filename: "upload.wav", header: header), ".ogg")
+    }
+
+    func testAACADTSTopLevelSyncHeader() {
+        let header = Data([0xFF, 0xF1, 0x50, 0x80, 0x01, 0x7F, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00])
+        XCTAssertEqual(audioFileExtension(filename: "upload", header: header), ".aac")
+    }
+
+    func testAACADTSMpeg2SyncHeader() {
+        let header = Data([0xFF, 0xF9, 0x50, 0x80, 0x01, 0x7F, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00])
+        XCTAssertEqual(audioFileExtension(filename: "voice-note.m4a", header: header), ".aac")
     }
 
     func testAIFFHeader() {

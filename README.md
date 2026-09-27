@@ -225,7 +225,7 @@ Content-Type: multipart/form-data
 | `response_format` | String | No       | `json` (default), `text`, or `verbose_json`; `srt`/`vtt` return 400 |
 | `temperature`     | Double | No       | Sampling temperature, 0.0-1.0                      |
 
-Supported audio formats: WAV, MP3, M4A, FLAC, AIFF, OGG. Files without a recognised extension are identified automatically via magic bytes.
+Supported audio formats: WAV, MP3, M4A/MP4, raw AAC/ADTS, FLAC, AIFF, OGG. Magic bytes take priority over the uploaded filename; a recognized extension is only a fallback when content is inconclusive.
 
 No API key is required. If your client sends an `Authorization` header it is silently ignored.
 
@@ -387,6 +387,7 @@ Sources/speech-server/
     STTService.swift               # STT protocol + DI
     FluidSTTService.swift          # FluidAudio ASR implementation (parakeet engine)
     AudioFormatDetection.swift     # Magic-byte audio format detection
+    DetectedAudioFileWriter.swift  # Header-buffered, extension-safe upload writer
     TTSService.swift               # TTS protocol + DI
     FluidTTSService.swift          # FluidAudio PocketTTS implementation (pocket_tts engine)
     AVSpeechTTSService.swift       # macOS AVSpeechSynthesizer implementation (avspeech engine)

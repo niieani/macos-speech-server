@@ -27,32 +27,15 @@ struct TranscriptionController: RouteCollection {
             guard let fieldName = state.currentFieldName else { return }
 
             if fieldName == "file" {
-                if state.fileHeaderBytes.count < 12 {
-                    let needed = 12 - state.fileHeaderBytes.count
-                    let available = min(needed, bodyChunk.readableBytes)
-                    if let bytes = bodyChunk.getBytes(at: bodyChunk.readerIndex, length: available) {
-                        state.fileHeaderBytes.append(contentsOf: bytes)
-                    }
+                if state.filePartCompleted {
+                    state.parseFailure = Abort(.badRequest, reason: "Exactly one file part is supported.")
+                    return
                 }
-
-                if state.fileOutputStream == nil {
+                if state.fileWriter == nil {
                     let filename = state.currentFileName ?? "upload"
-                    let ext = audioFileExtension(filename: filename, header: state.fileHeaderBytes)
-                    let url = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("\(UUID().uuidString)\(ext)")
-                    state.fileTempURL = url
-                    state.uploadedFileName = filename
-                    let stream = OutputStream(url: url, append: false)
-                    stream?.open()
-                    state.fileOutputStream = stream
+                    state.fileWriter = DetectedAudioFileWriter(filename: filename)
                 }
-
-                bodyChunk.withUnsafeReadableBytes { ptr in
-                    guard let base = ptr.baseAddress, ptr.count > 0 else { return }
-                    _ = state.fileOutputStream?.write(
-                        base.assumingMemoryBound(to: UInt8.self), maxLength: ptr.count)
-                    state.fileSize += ptr.count
-                }
+                state.fileWriter?.append(bodyChunk)
             }
             else {
                 var mutable = bodyChunk
@@ -68,8 +51,8 @@ struct TranscriptionController: RouteCollection {
 
         parser.onPartComplete = {
             if state.currentFieldName == "file" {
-                state.fileOutputStream?.close()
-                state.fileOutputStream = nil
+                state.fileWriter?.finish()
+                state.filePartCompleted = true
             }
             else if let fieldName = state.currentFieldName,
                 var buf = state.fieldBuffers[fieldName],
@@ -93,6 +76,10 @@ struct TranscriptionController: RouteCollection {
                     throw Abort(.payloadTooLarge, reason: "Upload exceeds the \(uploadLimitMB) MB limit.")
                 }
                 try parser.execute(chunk)
+                if let parseFailure = state.parseFailure {
+                    state.cleanup()
+                    throw parseFailure
+                }
             }
         }
         catch {
@@ -100,16 +87,20 @@ struct TranscriptionController: RouteCollection {
             throw error
         }
 
-        guard let audioTempURL = state.fileTempURL else {
+        guard let fileWriter = state.fileWriter else {
             throw Abort(.badRequest, reason: "'file' field is required.")
         }
-        defer { try? FileManager.default.removeItem(at: audioTempURL) }
-
-        guard state.fileSize > 0 else {
+        defer { fileWriter.cleanup() }
+        try fileWriter.throwIfFailed()
+        guard let audioTempURL = fileWriter.fileURL else {
             throw Abort(.badRequest, reason: "'file' must not be empty.")
         }
 
-        let filename = state.uploadedFileName ?? "upload"
+        guard fileWriter.byteCount > 0 else {
+            throw Abort(.badRequest, reason: "'file' must not be empty.")
+        }
+
+        let filename = fileWriter.filename
         let responseFormat = state.stringField("response_format") ?? "json"
         let language = state.stringField("language")
 
@@ -137,7 +128,7 @@ struct TranscriptionController: RouteCollection {
         }
 
         req.logger.notice(
-            "Transcription upload: filename=\(filename), size=\(state.fileSize) bytes, response_format=\(responseFormat)"
+            "Transcription upload: filename=\(filename), size=\(fileWriter.byteCount) bytes, response_format=\(responseFormat)"
         )
 
         let result = try await req.sttService.transcribe(audioURL: audioTempURL)
@@ -201,11 +192,9 @@ private final class MultipartParseState {
     var currentFileName: String?
     var fieldBuffers: [String: ByteBuffer] = [:]
     var fieldValues: [String: [String]] = [:]
-    var fileOutputStream: OutputStream?
-    var fileTempURL: URL?
-    var uploadedFileName: String?
-    var fileHeaderBytes = Data()
-    var fileSize = 0
+    var fileWriter: DetectedAudioFileWriter?
+    var filePartCompleted = false
+    var parseFailure: Error?
 
     func stringField(_ name: String) -> String? {
         fieldValues[name]?.last
@@ -216,12 +205,8 @@ private final class MultipartParseState {
     }
 
     func cleanup() {
-        fileOutputStream?.close()
-        fileOutputStream = nil
-        if let url = fileTempURL {
-            try? FileManager.default.removeItem(at: url)
-            fileTempURL = nil
-        }
+        fileWriter?.cleanup()
+        fileWriter = nil
     }
 }
 

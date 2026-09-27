@@ -129,6 +129,30 @@ final class TranscriptionIntegrationTests: XCTestCase {
         }
     }
 
+    func testDuplicateFilePartsAreRejected() async throws {
+        let crlf = "\r\n"
+        var body = Data()
+        for filename in ["first.wav", "second.wav"] {
+            body += "--\(boundary)\(crlf)".data(using: .utf8)!
+            body += "Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\(crlf)".data(
+                using: .utf8)!
+            body += "Content-Type: audio/wav\(crlf)\(crlf)".data(using: .utf8)!
+            body += Data([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45])
+            body += crlf.data(using: .utf8)!
+        }
+        body += "--\(boundary)--\(crlf)".data(using: .utf8)!
+
+        try await app.test(
+            .POST, "/v1/audio/transcriptions",
+            headers: transcriptionHeaders(),
+            body: ByteBuffer(data: body)
+        ) { res async throws in
+            XCTAssertEqual(res.status, .badRequest)
+            let error = try res.content.decode(OpenAIErrorResponse.self)
+            XCTAssertTrue(error.error.message.contains("one file"))
+        }
+    }
+
     // MARK: - Format coverage
 
     func testAIFFTranscription() async throws {

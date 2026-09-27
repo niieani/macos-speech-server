@@ -102,18 +102,15 @@ Routes are registered twice in `routes.swift` -- once at `/audio/*` and once at 
 
 ### Transcription upload pipeline
 
-`TranscriptionController` streams the request body directly to a temp file before any
-multipart parsing, keeping peak RAM at O(chunk_size) during upload:
+`TranscriptionController` parses multipart chunks incrementally, keeping peak RAM at O(chunk_size):
 
-1. Body chunks are written via `OutputStream` to `<req.id>.multipart` in the temp directory.
-   An in-flight byte counter rejects uploads exceeding **500 MB** with `413 Payload Too Large`.
-2. The temp file is mmap-read (`Data(contentsOf:options:.mappedIfSafe)`) and decoded with
-   `FormDataDecoder` from MultipartKit.
-3. `audioFileExtension(filename:header:)` (see `AudioFormatDetection.swift`) determines the
-   correct extension from the filename or the first 12 magic bytes of the parsed `ByteBuffer`.
-4. The audio bytes are written to a second temp file (`<req.id><ext>`) with the correct
-   extension, then passed as a URL to the STT service. The controller owns both temp files
-   and cleans them up via `defer`.
+1. An in-flight byte counter rejects bodies exceeding **500 MB** with `413 Payload Too Large`.
+2. `MultipartParser` dispatches file chunks and ordinary form fields incrementally.
+3. `DetectedAudioFileWriter` buffers the first 12 audio bytes across parser callbacks before
+   calling `audioFileExtension(filename:header:)`. Magic bytes win; recognized filename
+   extensions are fallback only. Raw AAC/ADTS is recognized as `.aac`.
+4. The writer flushes buffered and subsequent bytes to a correctly suffixed temp file. The
+   controller passes its URL to STT and cleans it up via `defer`.
 
 ### FluidAudio integration
 
@@ -602,7 +599,7 @@ All changes must go through a pull request. Never push directly to `main`.
 - **Config**: `ServerConfig` is loaded in `configure()` from `SPEECH_SERVER_CONFIG` env var → `./speech-server.yaml` → built-in defaults. All engine-selection switches live in `configure.swift`; adding a new engine means adding a `case` there. Engine enum raw values match YAML keys (e.g. `parakeet`, `pocket_tts`).
 - **Logging**: use `request.logger` in request context, `app.logger` during setup. Log level is set to `.notice` in `configure.swift` to suppress Vapor's internal debug noise. All operational log calls (request details, transcription progress) use `.notice`; use `.warning` or above for anomalies. Services that need their own logger (e.g. `FluidSTTService`) create a `Logger(label:)` instance with `logLevel` set explicitly.
 - **STTService protocol**: `transcribe(audioURL: URL)` returns `TranscriptionResult` (with `text` and `duration`), not a plain `String`. The URL points to a temp file with the correct audio extension, created and cleaned up by the controller. The `verbose_json` response includes a `segments` array matching the OpenAI API shape.
-- **Audio format detection**: lives in `AudioFormatDetection.swift` as a package-internal free function `audioFileExtension(filename:header:)`. `header` is the first 12 bytes of the audio data (`Data`). Called from `TranscriptionController`, not from `FluidSTTService`. `File.contentType` in Vapor is derived from the filename extension and may be `nil` -- always use `audioFileExtension` instead.
+- **Audio format detection**: lives in `AudioFormatDetection.swift` as a package-internal free function `audioFileExtension(filename:header:)`. `header` is the first 12 bytes of audio. Magic bytes are authoritative (including AAC/ADTS); recognized filename extensions are fallback only. Called from `TranscriptionController`, not from `FluidSTTService`.
 - **TTS voice validation**: `SpeechController` validates the voice with `ttsService.availableVoices.contains(voice)` before starting the stream (response headers already sent → can't return 4xx after). The unrecognised-voice error lists up to 5 available voices in its message. `FluidTTSService` still catches `PocketTtsConstantsLoader.LoadError.fileNotFound` and re-throws as `FluidTTSError.voiceNotFound` as a safety net, but this should only be reached if the guard is missing.
 - **Keeping docs in sync**: When making any user-visible change (new endpoint, changed behaviour, new field, new error), update `README.md`. When making any architectural change (new service, new constraint, new convention, new gotcha), update `AGENTS.md`. Both files should be updated in the same commit as the code change. Advanced installation instructions (system-service setup, switching between per-user and system modes, upgrading the system service, migrating from the old `deploy/` scripts) live in `docs/install.md`, not the README. The README's Installation section must stay short (2-3 lines of CLI, per-user `brew services start`) and link to `docs/install.md` via its "Advanced installation" subsection for anything beyond that.
 - **TDD convention**: Unit tests are written BEFORE the implementation they cover. When implementing a feature, write the test file first (it will fail to compile until the implementation is added), then write the implementation. This ensures tests actually define the contract, not just document it.
