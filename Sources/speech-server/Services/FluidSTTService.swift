@@ -19,6 +19,17 @@ final class FluidSTTService: STTService, @unchecked Sendable {
         self.vadManager = try await VadManager()
     }
 
+    /// Maps a `stt.parakeet.model_version` config value to a FluidAudio model: `v2` (English-only), `v3`
+    /// (multilingual, 25 languages) or `ultra` (post-trained v3: same languages and speed, lower WER).
+    static func modelVersion(named name: String) -> AsrModelVersion? {
+        switch name {
+        case "v2": .v2
+        case "v3": .v3
+        case "ultra": .ultra
+        default: nil
+        }
+    }
+
     func transcribe(audioURL: URL) async throws -> TranscriptionResult {
         guard let asrManager, let vadManager else {
             throw FluidSTTError.notInitialized

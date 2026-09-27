@@ -110,6 +110,19 @@ final class ServerConfigTests: XCTestCase {
         XCTAssertEqual(config.stt.parakeet?.modelVersion, "v2")
     }
 
+    func testParakeetModelVersionNamesMapToFluidAudioVersions() {
+        XCTAssertEqual(FluidSTTService.modelVersion(named: "v2"), .v2)
+        XCTAssertEqual(FluidSTTService.modelVersion(named: "v3"), .v3)
+        XCTAssertEqual(FluidSTTService.modelVersion(named: "ultra"), .ultra)
+        XCTAssertNil(FluidSTTService.modelVersion(named: "redux"))
+        XCTAssertNil(FluidSTTService.modelVersion(named: "v4"))
+    }
+
+    func testParakeetUltraAdvertisesTheV3Languages() {
+        XCTAssertEqual(
+            STTInfo.parakeet(modelVersion: "ultra").languages, STTInfo.parakeet(modelVersion: "v3").languages)
+    }
+
     func testDefaultModelVersionWhenParakeetBlockPresent() throws {
         let yaml = """
             stt:
